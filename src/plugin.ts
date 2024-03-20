@@ -89,10 +89,15 @@ const pluginAsync: FastifyPluginAsync<DBConfigOptions> = async (
   // Else there isn't a namespace, initialize the connection directly on orm
 
   await connection.initialize();
+  // @ts-ignore
+  fastify.orm = connection;
+
   fastify.decorate('orm', null);
   fastify.addHook('onRequest', async (request) => {
     // @ts-ignore
     request.orm = connection.createQueryRunner();
+    request.orm.data = request.orm.data ?? {};
+    request.orm.data.request = request;
     await request.orm.connect();
   });
 
