@@ -26,7 +26,7 @@ declare namespace FastifyTypeormInstance {
  * @property {string} namespace - Optional namespace to declare multiple DataSources in your project
  */
 
-type DBConfigOptions = {
+export type DBConfigOptions = {
   connection?: DataSource;
   namespace?: string;
 } & Partial<DataSourceOptions>;
