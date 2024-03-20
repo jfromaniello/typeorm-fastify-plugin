@@ -1,18 +1,23 @@
-import { FastifyPluginAsync } from 'fastify';
+import { FastifyPluginAsync, FastifyRequest } from 'fastify';
 import fp from 'fastify-plugin';
-import { DataSource, DataSourceOptions } from 'typeorm';
+import { DataSource, DataSourceOptions, QueryRunner } from 'typeorm';
 
 declare module 'fastify' {
-	export interface FastifyInstance {
-		orm: DataSource & FastifyTypeormInstance.FastifyTypeormNamespace;
-	}
+  export interface FastifyInstance {
+    orm: DataSource & FastifyTypeormInstance.FastifyTypeormNamespace;
+  }
+  export interface FastifyRequest {
+    orm: QueryRunner & {
+      [namespace: string]: QueryRunner;
+    }
+  }
 }
 
 // Declaring Multiple DataSources in a Project requires creation of namespace
 declare namespace FastifyTypeormInstance {
-	interface FastifyTypeormNamespace {
-		[namespace: string]: DataSource;
-	}
+  interface FastifyTypeormNamespace {
+    [namespace: string]: DataSource;
+  }
 }
 
 /**
@@ -22,58 +27,90 @@ declare namespace FastifyTypeormInstance {
  */
 
 type DBConfigOptions = {
-	connection?: DataSource;
-	namespace?: string;
+  connection?: DataSource;
+  namespace?: string;
 } & Partial<DataSourceOptions>;
 
 const pluginAsync: FastifyPluginAsync<DBConfigOptions> = async (
-	fastify,
-	options
+  fastify,
+  options
 ) => {
-	const { namespace } = options;
-	delete options.namespace;
-	let connection: DataSource;
+  const {
+    namespace,
+    connection: connectionInOptions,
+    ...typeormOptions
+  } = options;
 
-	if (options.connection) {
-		connection = options.connection;
-	} else {
-		connection = new DataSource(options as DataSourceOptions);
-	}
+  let connection: DataSource;
 
-	// If a namespace is passed
-	if (namespace) {
-		// If fastify instance does not already have orm initialized
-		if (!fastify.orm) {
-			fastify.decorate('orm', {});
-		}
+  if (connectionInOptions) {
+    connection = connectionInOptions;
+  } else {
+    connection = new DataSource(typeormOptions as DataSourceOptions);
+  }
 
-		// Check if namespace is already used
-		if (fastify.orm[namespace]) {
-			throw new Error(`This namespace has already been declared: ${namespace}`);
-		} else {
-			fastify.orm[namespace] = connection;
-			await fastify.orm[namespace].initialize();
-			fastify.addHook('onClose', async (fastifyInstance, done) => {
-				await fastifyInstance.orm[namespace].destroy();
-				done();
-			});
+  // If a namespace is passed
+  if (typeof namespace === 'string') {
+    // If fastify instance does not already have orm initialized
+    fastify.decorateRequest('orm', null);
 
-			return Promise.resolve();
-		}
-	}
-	// Else there isn't a namespace, initialize the connection directly on orm
+    // Check if namespace is already used
+    if (fastify.orm[namespace]) {
+      throw new Error(`This namespace has already been declared: ${namespace}`);
+    }
 
-	await connection.initialize();
-	fastify.decorate('orm', connection);
-	fastify.addHook('onClose', async (fastifyInstance, done) => {
-		await fastifyInstance.orm.destroy();
-		done();
-	});
+    // @ts-ignore
+    fastify.orm = fastify.orm || {};
+    fastify.orm[namespace] = connection;
+    await fastify.orm[namespace].initialize();
 
-	return Promise.resolve();
+    fastify.addHook('onRequest', async (request) => {
+      // @ts-ignore
+      request.orm = request.orm as {} || {};
+      request.orm[namespace] = connection.createQueryRunner();
+      await request.orm[namespace].connect();
+    });
+
+    const releaseQueryRunner = async (request: FastifyRequest) => {
+      // @ts-ignore
+      await (request.orm[namespace]).release();
+    }
+
+    fastify.addHook('onError', releaseQueryRunner)
+    fastify.addHook('onSend', releaseQueryRunner)
+
+    fastify.addHook('onClose', async (fastifyInstance) => {
+      await fastifyInstance.orm[namespace].destroy();
+    });
+
+    return;
+  }
+
+  // Else there isn't a namespace, initialize the connection directly on orm
+
+  await connection.initialize();
+  fastify.decorate('orm', null);
+  fastify.addHook('onRequest', async (request) => {
+    // @ts-ignore
+    request.orm = connection.createQueryRunner();
+    await request.orm.connect();
+  });
+
+  const releaseQueryRunner = async (request: FastifyRequest) => {
+    // @ts-ignore
+    await request.orm.release();
+  }
+  fastify.addHook('onError', releaseQueryRunner)
+  fastify.addHook('onSend', releaseQueryRunner)
+
+  fastify.addHook('onClose', async (fastifyInstance) => {
+    await fastifyInstance.orm.destroy();
+  });
+
+  return Promise.resolve();
 };
 
 export default fp(pluginAsync, {
-	fastify: '4.x',
-	name: '@fastify-typeorm',
+  fastify: '4.x',
+  name: '@fastify-typeorm',
 });

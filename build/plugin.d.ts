@@ -14,5 +14,5 @@ type DBConfigOptions = {
     connection?: DataSource;
     namespace?: string;
 } & Partial<DataSourceOptions>;
-declare const _default: FastifyPluginAsync<DBConfigOptions, import("fastify").RawServerDefault, import("fastify").FastifyTypeProviderDefault>;
+declare const _default: FastifyPluginAsync<DBConfigOptions>;
 export default _default;
